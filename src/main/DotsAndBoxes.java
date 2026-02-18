@@ -3,40 +3,42 @@ package main;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
+import java.io.*;
+import java.net.*;
 import java.util.ArrayList;
 
 public class DotsAndBoxes extends JFrame {
-    private final int ROWS = 5, COLS = 5; 
-    private final int SIZE = 60; 
-    private final int OFFSET = 50; 
-    
-    private boolean player1Turn = true;
+    private final int ROWS = 5, COLS = 5, SIZE = 60, OFFSET = 50;
+    private boolean player1Turn = true; // No online, define quem começa (Sempre o Host)
     private ArrayList<Line> lines = new ArrayList<>();
-    private int[][] boxes = new int[ROWS-1][COLS-1]; // 0: vazio, 1: P1, 2: P2
-    
-    // Novas variáveis para Placar
-    private int score1 = 0;
-    private int score2 = 0;
+    private int[][] boxes = new int[ROWS-1][COLS-1];
+    private int score1 = 0, score2 = 0;
     private JLabel statusLabel;
 
+    // Variáveis de Rede
+    private Socket socket;
+    private ObjectOutputStream out;
+    private ObjectInputStream in;
+    private boolean isServer; 
+    private boolean myTurn;
+
     public DotsAndBoxes() {
-        setTitle("Dots and Boxes - Placar & Reset");
+        if (!setupNetwork()) System.exit(0);
+
+        setTitle("Dots and Boxes Online - " + (isServer ? "Servidor (Vermelho)" : "Cliente (Azul)"));
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
 
-        // Painel de Status (Topo)
         JPanel topPanel = new JPanel(new BorderLayout());
-        statusLabel = new JLabel("Vez do Vermelho | Placar: 0 - 0", SwingConstants.CENTER);
+        statusLabel = new JLabel("", SwingConstants.CENTER);
         statusLabel.setFont(new Font("Arial", Font.BOLD, 16));
+        updateStatus();
         
-        JButton resetBtn = new JButton("Reiniciar Jogo");
-        resetBtn.addActionListener(e -> resetGame());
-        
+        // Reset no online geralmente é desabilitado ou sincronizado. 
+        // Para simplificar, deixaremos apenas o status no topo.
         topPanel.add(statusLabel, BorderLayout.CENTER);
-        topPanel.add(resetBtn, BorderLayout.EAST);
         add(topPanel, BorderLayout.NORTH);
 
-        // Painel do Jogo (Centro)
         JPanel gamePanel = new JPanel() {
             @Override
             protected void paintComponent(Graphics g) {
@@ -48,8 +50,10 @@ public class DotsAndBoxes extends JFrame {
         gamePanel.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
-                handleMouseClick(e.getX(), e.getY());
-                gamePanel.repaint();
+                if (myTurn) {
+                    handleMouseClick(e.getX(), e.getY());
+                    gamePanel.repaint();
+                }
             }
         });
 
@@ -59,34 +63,47 @@ public class DotsAndBoxes extends JFrame {
         pack();
         setLocationRelativeTo(null);
         setVisible(true);
+
+        // Inicia a escuta de jogadas
+        new Thread(this::listenForOpponent).start();
     }
 
-    private void drawGame(Graphics2D g) {
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+    private boolean setupNetwork() {
+        String[] options = {"Criar Sala (Host)", "Entrar em Sala (Cliente)"};
+        int choice = JOptionPane.showOptionDialog(null, "Selecione o modo de jogo:", "Conexão",
+                0, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
 
-        // Desenhar caixas preenchidas
-        for (int r = 0; r < ROWS - 1; r++) {
-            for (int c = 0; c < COLS - 1; c++) {
-                if (boxes[r][c] != 0) {
-                    g.setColor(boxes[r][c] == 1 ? new Color(255, 100, 100, 150) : new Color(100, 100, 255, 150));
-                    g.fillRect(OFFSET + c * SIZE, OFFSET + r * SIZE, SIZE, SIZE);
-                }
+        try {
+            if (choice == 0) {
+                isServer = true;
+                myTurn = true; // Host começa
+                ServerSocket serverSocket = new ServerSocket(5000);
+                JOptionPane.showMessageDialog(null, "Aguardando oponente na porta 5000...");
+                socket = serverSocket.accept();
+            } else {
+                isServer = false;
+                myTurn = false; // Cliente aguarda
+                String ip = JOptionPane.showInputDialog("Digite o IP do Host:", "localhost");
+                socket = new Socket(ip, 5000);
             }
+            out = new ObjectOutputStream(socket.getOutputStream());
+            in = new ObjectInputStream(socket.getInputStream());
+            return true;
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(null, "Erro de conexão: " + e.getMessage());
+            return false;
         }
+    }
 
-        // Desenhar linhas
-        g.setStroke(new BasicStroke(4));
-        for (Line l : lines) {
-            g.setColor(l.color);
-            g.drawLine(l.x1, l.y1, l.x2, l.y2);
-        }
-
-        // Desenhar pontos
-        g.setColor(Color.DARK_GRAY);
-        for (int i = 0; i < ROWS; i++) {
-            for (int j = 0; j < COLS; j++) {
-                g.fillOval(OFFSET + j * SIZE - 5, OFFSET + i * SIZE - 5, 10, 10);
+    private void listenForOpponent() {
+        try {
+            while (true) {
+                Line incomingLine = (Line) in.readObject();
+                // Quando recebe uma linha, processa ela como jogada do oponente
+                processMove(incomingLine, false);
             }
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "Oponente desconectou!");
         }
     }
 
@@ -96,29 +113,65 @@ public class DotsAndBoxes extends JFrame {
                 int px = OFFSET + j * SIZE;
                 int py = OFFSET + i * SIZE;
 
+                Line lineToAdd = null;
                 if (x > px && x < px + SIZE && Math.abs(y - py) < 10 && j < COLS - 1) {
-                    addLine(px, py, px + SIZE, py);
-                    return;
+                    lineToAdd = new Line(px, py, px + SIZE, py, isServer ? Color.RED : Color.BLUE);
+                } else if (y > py && y < py + SIZE && Math.abs(x - px) < 10 && i < ROWS - 1) {
+                    lineToAdd = new Line(px, py, px, py + SIZE, isServer ? Color.RED : Color.BLUE);
                 }
-                if (y > py && y < py + SIZE && Math.abs(x - px) < 10 && i < ROWS - 1) {
-                    addLine(px, py, px, py + SIZE);
+
+                if (lineToAdd != null && !lines.contains(lineToAdd)) {
+                    try {
+                        out.writeObject(lineToAdd); // Envia para o outro
+                        out.flush();
+                        processMove(lineToAdd, true);
+                    } catch (IOException ex) {
+                        ex.printStackTrace();
+                    }
                     return;
                 }
             }
         }
     }
 
-    private void addLine(int x1, int y1, int x2, int y2) {
-        Line newLine = new Line(x1, y1, x2, y2, player1Turn ? Color.RED : Color.BLUE);
-        if (!lines.contains(newLine)) {
-            lines.add(newLine);
-            boolean boxClosed = checkForBox();
-            
-            if (!boxClosed) {
-                player1Turn = !player1Turn;
+    private synchronized void processMove(Line line, boolean isMyMove) {
+        lines.add(line);
+        boolean boxClosed = checkForBox();
+        
+        // Regra: se fechou caixa, continua sendo a vez de quem jogou
+        if (!boxClosed) {
+            myTurn = !isMyMove;
+            player1Turn = !player1Turn;
+        } else {
+            myTurn = isMyMove;
+            // player1Turn não muda para manter a cor correta de quem fechou
+        }
+        
+        updateStatus();
+        checkGameOver();
+        repaint();
+    }
+
+    private void drawGame(Graphics2D g) {
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        for (int r = 0; r < ROWS - 1; r++) {
+            for (int c = 0; c < COLS - 1; c++) {
+                if (boxes[r][c] != 0) {
+                    g.setColor(boxes[r][c] == 1 ? new Color(255, 100, 100, 150) : new Color(100, 100, 255, 150));
+                    g.fillRect(OFFSET + c * SIZE, OFFSET + r * SIZE, SIZE, SIZE);
+                }
             }
-            updateStatus();
-            checkGameOver();
+        }
+        g.setStroke(new BasicStroke(4));
+        for (Line l : lines) {
+            g.setColor(l.color);
+            g.drawLine(l.x1, l.y1, l.x2, l.y2);
+        }
+        g.setColor(Color.DARK_GRAY);
+        for (int i = 0; i < ROWS; i++) {
+            for (int j = 0; j < COLS; j++) {
+                g.fillOval(OFFSET + j * SIZE - 5, OFFSET + i * SIZE - 5, 10, 10);
+            }
         }
     }
 
@@ -137,12 +190,9 @@ public class DotsAndBoxes extends JFrame {
     }
 
     private boolean isSquareComplete(int r, int c) {
-        int x = OFFSET + c * SIZE;
-        int y = OFFSET + r * SIZE;
-        return hasLine(x, y, x + SIZE, y) && 
-               hasLine(x, y + SIZE, x + SIZE, y + SIZE) &&
-               hasLine(x, y, x, y + SIZE) && 
-               hasLine(x + SIZE, y, x + SIZE, y + SIZE);
+        int x = OFFSET + c * SIZE, y = OFFSET + r * SIZE;
+        return hasLine(x, y, x + SIZE, y) && hasLine(x, y + SIZE, x + SIZE, y + SIZE) &&
+               hasLine(x, y, x, y + SIZE) && hasLine(x + SIZE, y, x + SIZE, y + SIZE);
     }
 
     private boolean hasLine(int x1, int y1, int x2, int y2) {
@@ -153,33 +203,33 @@ public class DotsAndBoxes extends JFrame {
     }
 
     private void updateStatus() {
-        String turn = player1Turn ? "Vez do Vermelho" : "Vez do Azul";
-        statusLabel.setText(turn + " | Placar: " + score1 + " - " + score2);
+        String turnText = myTurn ? "SUA VEZ!" : "Aguardando oponente...";
+        statusLabel.setText(turnText + " | Placar: " + score1 + " - " + score2);
+        statusLabel.setForeground(myTurn ? new Color(0, 150, 0) : Color.BLACK);
     }
 
     private void checkGameOver() {
         if (score1 + score2 == (ROWS - 1) * (COLS - 1)) {
-            String winner;
-            if (score1 > score2) winner = "Vermelho venceu!";
-            else if (score2 > score1) winner = "Azul venceu!";
-            else winner = "Empate!";
-            
-            JOptionPane.showMessageDialog(this, "Fim de Jogo!\n" + winner + "\nPlacar final: " + score1 + " - " + score2);
-            resetGame();
+            String winner = (score1 > score2) ? "Vermelho venceu!" : (score2 > score1) ? "Azul venceu!" : "Empate!";
+            JOptionPane.showMessageDialog(this, "Fim de Jogo!\n" + winner);
+            // No online, o reset deve ser manual fechando e abrindo para evitar bugs de dessincronização
         }
     }
 
     private void resetGame() {
+        // Método mantido para compatibilidade, mas no online o ideal é reiniciar a conexão
         lines.clear();
         boxes = new int[ROWS-1][COLS-1];
-        score1 = 0;
-        score2 = 0;
+        score1 = 0; score2 = 0;
         player1Turn = true;
+        myTurn = isServer;
         updateStatus();
         repaint();
     }
 
-    static class Line {
+    // Line precisa ser Serializable para viajar pela rede!
+    static class Line implements Serializable {
+        private static final long serialVersionUID = 1L;
         int x1, y1, x2, y2;
         Color color;
         Line(int x1, int y1, int x2, int y2, Color c) {
@@ -188,13 +238,12 @@ public class DotsAndBoxes extends JFrame {
         @Override
         public boolean equals(Object obj) {
             if (!(obj instanceof Line)) return false;
-            Line other = (Line) obj;
-            return (x1 == other.x1 && y1 == other.y1 && x2 == other.x2 && y2 == other.y2);
+            Line o = (Line) obj;
+            return (x1 == o.x1 && y1 == o.y1 && x2 == o.x2 && y2 == o.y2);
         }
     }
 
     public static void main(String[] args) {
-        // Garante que o Swing rode na thread correta
         SwingUtilities.invokeLater(() -> new DotsAndBoxes());
     }
 }
