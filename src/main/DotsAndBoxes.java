@@ -7,21 +7,48 @@ import java.io.*;
 import java.net.*;
 import java.util.ArrayList;
 
+// Classe principal que herda JFrame
+// Controla: Interface gráfica, Lógica do jogo, Comunicação em rede e Estado da partida
 public class DotsAndBoxes extends JFrame {
+	
+	// Variáveis globais (configuração do tabuleiro)
+	
+	// ROWS: quantidade de linhas de pontos
+	// COLS: quantidade de colunas de pontos
+	// SIZE: tamanho de cada célula
+	// OFFSET: margem da tela
+	// Como são 5x5 pontos → teremos 4x4 caixas
     private final int ROWS = 5, COLS = 5, SIZE = 60, OFFSET = 50;
+    
+    // Controle de turno
+    // player1Turn: controla alternância lógica (vermelho/azul)
     private boolean player1Turn = true; // No online, define quem começa (Sempre o Host)
+    
+    // lines: Armazena todas as linhas desenhadas
+    // boxes: Matriz que representa as caixas fechadas:
+    // 0 → não fechada | 1 → jogador vermelho | 2 → jogador azul
     private ArrayList<Line> lines = new ArrayList<>();
     private int[][] boxes = new int[ROWS-1][COLS-1];
+    
     private int score1 = 0, score2 = 0;
     private JLabel statusLabel;
 
     // Variáveis de Rede
+    // Socket: conexão cliente-servidor
+    // ObjectOutputStream: envia objetos
+    // ObjectInputStream: recebe objetos
+    // isServer: define se é host
     private Socket socket;
     private ObjectOutputStream out;
     private ObjectInputStream in;
     private boolean isServer; 
+    
+    // myTurn: controla se o jogador local pode jogar
     private boolean myTurn;
 
+    // Construtor
+    // Fluxo: configura rede, configura janela, cria painel de jogo, adiciona listener de mouse
+    // e inicia thread para ouvir oponente
     public DotsAndBoxes() {
         if (!setupNetwork()) System.exit(0);
 
@@ -34,8 +61,8 @@ public class DotsAndBoxes extends JFrame {
         statusLabel.setFont(new Font("Arial", Font.BOLD, 16));
         updateStatus();
         
-        // Reset no online geralmente é desabilitado ou sincronizado. 
-        // Para simplificar, deixaremos apenas o status no topo.
+        // Reset no online geralmente é desabilitado ou sincronizado 
+        // Para simplificar, deixaremos apenas o status no topo
         topPanel.add(statusLabel, BorderLayout.CENTER);
         add(topPanel, BorderLayout.NORTH);
 
@@ -68,6 +95,7 @@ public class DotsAndBoxes extends JFrame {
         new Thread(this::listenForOpponent).start();
     }
 
+    // Define se o jogador será: servidor (cria sala) e cliente (entra na sala)
     private boolean setupNetwork() {
         String[] options = {"Criar Sala (Host)", "Entrar em Sala (Cliente)"};
         int choice = JOptionPane.showOptionDialog(null, "Selecione o modo de jogo:", "Conexão",
@@ -75,17 +103,21 @@ public class DotsAndBoxes extends JFrame {
 
         try {
             if (choice == 0) {
+            	// Modo servidor abre porta 5000 e espera cliente conectar
                 isServer = true;
                 myTurn = true; // Host começa
                 ServerSocket serverSocket = new ServerSocket(5000);
                 JOptionPane.showMessageDialog(null, "Aguardando oponente na porta 5000...");
                 socket = serverSocket.accept();
             } else {
+            	// Modo cliente conecta o IP informado
                 isServer = false;
                 myTurn = false; // Cliente aguarda
                 String ip = JOptionPane.showInputDialog("Digite o IP do Host:", "localhost");
                 socket = new Socket(ip, 5000);
             }
+            
+            // Criação dos streams (permite enviar objetos Line pela rede)
             out = new ObjectOutputStream(socket.getOutputStream());
             in = new ObjectInputStream(socket.getInputStream());
             return true;
@@ -95,6 +127,8 @@ public class DotsAndBoxes extends JFrame {
         }
     }
 
+    // Função que fica em loop infinito aguardando jogadas do adversário
+    // Executa em uma Thread separada para não travar a interface
     private void listenForOpponent() {
         try {
             while (true) {
@@ -107,6 +141,9 @@ public class DotsAndBoxes extends JFrame {
         }
     }
 
+    // Função que detecta se o clique foi: em uma linha horizontal ou em uma linha vertical
+    // Cria objeto: 
+    // Se a linha ainda não existe: envia para o oponente e processa localmente
     private void handleMouseClick(int x, int y) {
         for (int i = 0; i < ROWS; i++) {
             for (int j = 0; j < COLS; j++) {
@@ -134,6 +171,8 @@ public class DotsAndBoxes extends JFrame {
         }
     }
 
+    // Função Central do Sistema: adiciona linha à lista, Verifica se fechou caixa,
+    // atualiza turno, atualiza placar e repaint
     private synchronized void processMove(Line line, boolean isMyMove) {
         lines.add(line);
         boolean boxClosed = checkForBox();
@@ -152,6 +191,7 @@ public class DotsAndBoxes extends JFrame {
         repaint();
     }
 
+    // Responsável por desenhar: caixas preenchidas, linhas jogadas e pontos do tabuleiro
     private void drawGame(Graphics2D g) {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         for (int r = 0; r < ROWS - 1; r++) {
@@ -175,6 +215,8 @@ public class DotsAndBoxes extends JFrame {
         }
     }
 
+    // Percorre todas as possíveis caixas
+    // Se fechou: marca dono da caixa, incrementa pontuação e retorna true
     private boolean checkForBox() {
         boolean closedAny = false;
         for (int r = 0; r < ROWS - 1; r++) {
@@ -189,12 +231,14 @@ public class DotsAndBoxes extends JFrame {
         return closedAny;
     }
 
+    // Verifica se existem as 4 linhas
     private boolean isSquareComplete(int r, int c) {
         int x = OFFSET + c * SIZE, y = OFFSET + r * SIZE;
         return hasLine(x, y, x + SIZE, y) && hasLine(x, y + SIZE, x + SIZE, y + SIZE) &&
                hasLine(x, y, x, y + SIZE) && hasLine(x + SIZE, y, x + SIZE, y + SIZE);
     }
 
+    // Percorre a lista de linhas e verifica se existe exatamente aquela coordenada
     private boolean hasLine(int x1, int y1, int x2, int y2) {
         for (Line l : lines) {
             if (l.x1 == x1 && l.y1 == y1 && l.x2 == x2 && l.y2 == y2) return true;
@@ -202,12 +246,14 @@ public class DotsAndBoxes extends JFrame {
         return false;
     }
 
+    // Atualiza: texto do turno, cor da mensagem e placar
     private void updateStatus() {
         String turnText = myTurn ? "SUA VEZ!" : "Aguardando oponente...";
         statusLabel.setText(turnText + " | Placar: " + score1 + " - " + score2);
         statusLabel.setForeground(myTurn ? new Color(0, 150, 0) : Color.BLACK);
     }
 
+    // Condição de fim se todas as caixas foram preenchidas → exibe vencedor
     private void checkGameOver() {
         if (score1 + score2 == (ROWS - 1) * (COLS - 1)) {
             String winner = (score1 > score2) ? "Vermelho venceu!" : (score2 > score1) ? "Azul venceu!" : "Empate!";
@@ -216,8 +262,8 @@ public class DotsAndBoxes extends JFrame {
         }
     }
 
+    // Método mantido para compatibilidade, mas no online o ideal é reiniciar a conexão
     private void resetGame() {
-        // Método mantido para compatibilidade, mas no online o ideal é reiniciar a conexão
         lines.clear();
         boxes = new int[ROWS-1][COLS-1];
         score1 = 0; score2 = 0;
@@ -228,6 +274,8 @@ public class DotsAndBoxes extends JFrame {
     }
 
     // Line precisa ser Serializable para viajar pela rede!
+    // Por que Serializable? 
+    // Porque objetos são enviados via ObjectOutputStream
     static class Line implements Serializable {
         private static final long serialVersionUID = 1L;
         int x1, y1, x2, y2;
@@ -235,6 +283,8 @@ public class DotsAndBoxes extends JFrame {
         Line(int x1, int y1, int x2, int y2, Color c) {
             this.x1 = x1; this.y1 = y1; this.x2 = x2; this.y2 = y2; this.color = c;
         }
+        
+        // Evita duplicação
         @Override
         public boolean equals(Object obj) {
             if (!(obj instanceof Line)) return false;
@@ -244,6 +294,7 @@ public class DotsAndBoxes extends JFrame {
     }
 
     public static void main(String[] args) {
+    	// Garante que a interface seja criada na Event Dispatch Thread (EDT)
         SwingUtilities.invokeLater(() -> new DotsAndBoxes());
     }
 }
